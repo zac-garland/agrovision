@@ -1,0 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+datascience_env/
+.venv/
+venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Large files (models, datasets)
+*.tar
+*.tar.gz
+*.zip
+*.h5
+*.pkl
+*.pickle
+models/weights/
+models/checkpoints/
+data/raw/
+data/processed/
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+*.sqlite3
+
+# OS files
+.DS_Store
+Thumbs.db
+.directory
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Flask
+instance/
+.webassets-cache
+
+# Streamlit
+.streamlit/
+
+# Node modules (if any JS)
+node_modules/
+npm-debug.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Keep these tracked (important files)
+!.gitkeep
+!backend/app/__init__.py
+!frontend/__init__.py
