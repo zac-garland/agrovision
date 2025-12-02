@@ -1,6 +1,7 @@
 from flask import Flask, jsonify
 from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG
 from routes.health import health_bp
+from routes.diagnose import diagnose_bp
 from utils.error_handler import setup_error_handlers
 
 def create_app():
@@ -12,6 +13,7 @@ def create_app():
     
     # Register blueprints
     app.register_blueprint(health_bp)
+    app.register_blueprint(diagnose_bp)
     
     # Error handlers
     setup_error_handlers(app)
