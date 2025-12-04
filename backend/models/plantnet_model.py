@@ -5,9 +5,17 @@ import json
 from config import (
     PLANTNET_MODEL_PATH, 
     PLANTNET_18_MODEL_PATH,
+    EFFICIENTNET_MODEL_PATH,
     COMMON_NAMES_PATH,
     DEVICE
 )
+
+# Try to import EfficientNet from efficientnet-pytorch if available
+try:
+    from efficientnet_pytorch import EfficientNet
+    EFFICIENTNET_PYTORCH_AVAILABLE = True
+except ImportError:
+    EFFICIENTNET_PYTORCH_AVAILABLE = False
 
 # Metadata paths (relative to project root)
 BASE_DIR = Path(__file__).parent.parent.parent
@@ -19,14 +27,14 @@ SPECIES_ID_TO_NAME = META_DIR / "plantnet300K_species_id_2_name.json"
 class PlantNetModel:
     """Wrapper for PlantNet-300K model inference."""
     
-    def __init__(self, use_resnet18=False):
+    def __init__(self, use_efficientnet=True):
         """
         Initialize PlantNet model.
         
         Args:
-            use_resnet18: If True, use ResNet18; else use ResNet152 (more accurate)
+            use_efficientnet: If True, use EfficientNet B4; else use ResNet152 (legacy)
         """
-        self.use_resnet18 = use_resnet18
+        self.use_efficientnet = use_efficientnet
         self.device = torch.device(DEVICE)
         self.model = None
         self.class_idx_to_species_id = None
@@ -40,19 +48,37 @@ class PlantNetModel:
     def load_model(self):
         """Load pretrained PlantNet model."""
         try:
-            if self.use_resnet18:
-                print("🔄 Loading PlantNet ResNet18...")
-                checkpoint_path = PLANTNET_18_MODEL_PATH
-                self.model = models.resnet18(weights=None)
+            if self.use_efficientnet:
+                print("🔄 Loading PlantNet EfficientNet B4...")
+                checkpoint_path = EFFICIENTNET_MODEL_PATH
                 num_classes = 1081  # PlantNet-300K has 1081 species
+                
+                # Try to use efficientnet-pytorch first (more common), then torchvision
+                if EFFICIENTNET_PYTORCH_AVAILABLE:
+                    print("   Using efficientnet-pytorch library...")
+                    self.model = EfficientNet.from_name('efficientnet-b4', num_classes=num_classes)
+                else:
+                    # Try torchvision EfficientNet (available in torchvision 0.13+)
+                    try:
+                        print("   Using torchvision EfficientNet...")
+                        self.model = models.efficientnet_b4(weights=None)
+                        # Modify final classifier layer for number of classes
+                        # EfficientNet uses classifier[1] for the Linear layer
+                        in_features = self.model.classifier[1].in_features
+                        self.model.classifier[1] = torch.nn.Linear(in_features, num_classes)
+                    except AttributeError:
+                        raise RuntimeError(
+                            "EfficientNet not available in torchvision. "
+                            "Install efficientnet-pytorch: pip install efficientnet-pytorch"
+                        )
             else:
-                print("🔄 Loading PlantNet ResNet152...")
+                print("🔄 Loading PlantNet ResNet152 (legacy)...")
                 checkpoint_path = PLANTNET_MODEL_PATH
                 self.model = models.resnet152(weights=None)
                 num_classes = 1081
-            
-            # Modify final layer for number of classes
-            self.model.fc = torch.nn.Linear(self.model.fc.in_features, num_classes)
+                
+                # Modify final layer for number of classes (ResNet uses fc)
+                self.model.fc = torch.nn.Linear(self.model.fc.in_features, num_classes)
             
             # Load checkpoint
             if Path(checkpoint_path).exists():
@@ -60,20 +86,52 @@ class PlantNetModel:
                 
                 # Handle different checkpoint formats
                 if isinstance(checkpoint, dict):
+                    # Try common checkpoint key names
+                    state_dict = None
                     if 'model' in checkpoint:
-                        self.model.load_state_dict(checkpoint['model'])
+                        state_dict = checkpoint['model']
                     elif 'model_state_dict' in checkpoint:
-                        self.model.load_state_dict(checkpoint['model_state_dict'])
+                        state_dict = checkpoint['model_state_dict']
                     elif 'state_dict' in checkpoint:
-                        self.model.load_state_dict(checkpoint['state_dict'])
-                    else:
-                        # Try loading directly
+                        state_dict = checkpoint['state_dict']
+                    elif 'net' in checkpoint:
+                        state_dict = checkpoint['net']
+                    
+                    if state_dict:
                         try:
-                            self.model.load_state_dict(checkpoint)
-                        except:
+                            self.model.load_state_dict(state_dict, strict=False)
+                        except Exception as e:
+                            print(f"⚠️  Warning: Error loading state_dict: {e}")
+                            print(f"   Trying to load with strict=False...")
+                            # Try loading with strict=False to allow partial loading
+                            try:
+                                missing_keys, unexpected_keys = self.model.load_state_dict(state_dict, strict=False)
+                                if missing_keys:
+                                    print(f"   Missing keys: {len(missing_keys)}")
+                                if unexpected_keys:
+                                    print(f"   Unexpected keys: {len(unexpected_keys)}")
+                            except Exception as e2:
+                                print(f"❌ Could not load checkpoint: {e2}")
+                                raise
+                    else:
+                        # Try loading the entire dict as state_dict
+                        try:
+                            missing_keys, unexpected_keys = self.model.load_state_dict(checkpoint, strict=False)
+                            if missing_keys:
+                                print(f"⚠️  Missing keys: {len(missing_keys)}")
+                            if unexpected_keys:
+                                print(f"⚠️  Unexpected keys: {len(unexpected_keys)}")
+                        except Exception as e:
                             print(f"⚠️  Warning: Could not load checkpoint directly. Keys: {list(checkpoint.keys())[:5]}")
+                            print(f"   Error: {e}")
+                            raise
                 else:
-                    self.model.load_state_dict(checkpoint)
+                    # Checkpoint is already a state_dict
+                    try:
+                        self.model.load_state_dict(checkpoint, strict=False)
+                    except Exception as e:
+                        print(f"❌ Error loading checkpoint state_dict: {e}")
+                        raise
                 
                 print(f"✅ Model loaded from {checkpoint_path}")
             else:
@@ -216,9 +274,9 @@ class PlantNetModel:
 # Global model instance
 _plantnet_model = None
 
-def get_plantnet_model(use_resnet18=False):
+def get_plantnet_model(use_efficientnet=True):
     """Get or create global PlantNet model instance."""
     global _plantnet_model
     if _plantnet_model is None:
-        _plantnet_model = PlantNetModel(use_resnet18=use_resnet18)
+        _plantnet_model = PlantNetModel(use_efficientnet=use_efficientnet)
     return _plantnet_model

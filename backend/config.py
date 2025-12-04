@@ -6,9 +6,12 @@ BASE_DIR = Path(__file__).parent.parent
 
 # Model paths
 MODEL_DIR = BASE_DIR / "models"
-PLANTNET_MODEL_PATH = MODEL_DIR / "resnet152_weights_best_acc.tar"
-PLANTNET_18_MODEL_PATH = MODEL_DIR / "resnet18_weights_best_acc.tar"
+PLANTNET_MODEL_PATH = MODEL_DIR / "efficientnet_b4_weights_best_acc.tar"  # General plant model (PlantNet-300K)
+PLANTNET_18_MODEL_PATH = MODEL_DIR / "resnet18_weights_best_acc.tar"  # Keep for backward compatibility
+EFFICIENTNET_MODEL_PATH = MODEL_DIR / "efficientnet_b4_weights_best_acc.tar"
+HOUSEPLANT_MODEL_PATH = MODEL_DIR / "efficientnet_b4_houseplant_finetuned.tar"  # Fine-tuned houseplant model
 COMMON_NAMES_PATH = MODEL_DIR / "species_to_common_name.json"
+YOLO_LEAF_MODEL_PATH = MODEL_DIR / "yolo11x_leaf.pt"
 
 # Server config
 FLASK_HOST = os.getenv("FLASK_HOST", "127.0.0.1")
@@ -26,6 +29,7 @@ ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp"}
 REQUEST_TIMEOUT_SEC = 60
 
 # LLM config
-LLM_MODEL_NAME = "mistral-7b"
-LLM_TEMPERATURE = 0.7
-LLM_MAX_TOKENS = 512
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "mistral")  # Ollama model name
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", 0.7))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", 512))
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
