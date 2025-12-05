@@ -6,6 +6,9 @@ import time
 import numpy as np
 from config import ALLOWED_EXTENSIONS
 from models.dual_classifier import get_dual_classifier
+from models.multi_classifier import get_multi_classifier
+from models.species_classifier import get_species_classifier
+from models.disease_classifier import get_disease_classifier
 from services.leaf_detector import get_leaf_detector
 from services.lesion_analyzer import get_lesion_analyzer
 from services.diagnosis_engine import get_diagnosis_engine
@@ -73,17 +76,40 @@ def diagnose():
         print(f"\n🔍 Processing image: {file.filename}")
         print(f"   Size: {image_pil.size}, Mode: {image_pil.mode}")
         
-        # Get dual classifier (uses both houseplant and PlantNet models)
-        classifier = get_dual_classifier()
+        # Phase 1: Species identification using new unified species classifier
+        print("   Running species classifier...")
+        species_classifier = get_species_classifier()
+        species_results = species_classifier.predict(image_pil, top_k=5)
         
-        # Run dual classifier inference (selects best result from both models)
-        print("   Running dual classifier inference (houseplant + PlantNet)...")
-        plant_results = classifier.predict(image_pil, top_k=5)
+        # Phase 2: Disease detection using disease classifier
+        print("   Running disease classifier...")
+        disease_classifier = get_disease_classifier()
+        print(f"   Disease classifier available: {disease_classifier.available}")
+        if not disease_classifier.available:
+            print(f"   ⚠️  Disease classifier not available - check model file exists")
+        disease_results = disease_classifier.predict(image_pil, top_k=5)
+        print(f"   Disease results available: {disease_results.get('available', False)}")
+        if disease_results.get('error'):
+            print(f"   Disease classifier error: {disease_results.get('error')}")
         
-        # Log which model was selected
-        dual_info = plant_results.get("dual_classifier", {})
-        selected_model = dual_info.get("selected_model", "unknown")
-        print(f"   Selected model: {selected_model} (confidence: {dual_info.get(selected_model + '_confidence', 0):.3f})")
+        # Format plant_results for backward compatibility
+        # Use species classifier as primary, with disease info
+        plant_results = {
+            'species': species_results,
+            'disease': disease_results,
+            'primary': species_results.get('primary'),
+            'top_k': species_results.get('top_k', []),
+            'model_source': 'unified_classifiers'
+        }
+        
+        # Log results
+        if species_results.get('available'):
+            primary_species = species_results.get('primary', {})
+            print(f"   Species: {primary_species.get('species', 'unknown')} ({primary_species.get('confidence', 0):.3f})")
+        
+        if disease_results.get('available'):
+            primary_disease = disease_results.get('primary', {})
+            print(f"   Disease: {primary_disease.get('condition', 'unknown')} ({primary_disease.get('confidence', 0):.3f})")
         
         # Phase 4: Leaf detection and lesion analysis
         print("   Running leaf detection and lesion analysis...")
@@ -139,12 +165,72 @@ def diagnose():
         diagnosis_engine = get_diagnosis_engine()
         
         # Prepare data for diagnosis engine
-        primary_plant = plant_results.get("primary", {})
+        # Format species result for compatibility
+        species_primary = species_results.get("primary", {})
+        primary_plant = {
+            'species_name': species_primary.get('species', 'Unknown'),
+            'common_name': species_primary.get('species', 'Unknown'),  # Species classifier uses hierarchical names
+            'confidence': species_primary.get('confidence', 0.0)
+        }
+        
+        # Format disease result
+        disease_primary = disease_results.get("primary", {})
+        
+        # Get disease classifier confidence for diagnosis FIRST (before any formatting)
+        # Extract confidence from the raw disease_primary result
+        disease_confidence = 0.0
+        if disease_results.get('available') and disease_primary:
+            raw_confidence = disease_primary.get('confidence', 0.0)
+            disease_confidence = float(raw_confidence) if raw_confidence is not None else 0.0
+            if disease_confidence > 0:
+                print(f"   ✅ Disease classifier confidence extracted: {disease_confidence:.3f} ({disease_confidence*100:.1f}%)")
+            else:
+                print(f"   ⚠️  Disease classifier available but confidence is 0")
+        else:
+            # Disease classifier not available - this is OK, we'll use fallback
+            if not disease_results.get('available'):
+                print(f"   ⚠️  Disease classifier not available - will use health-based confidence")
+                if disease_results.get('error'):
+                    print(f"      Error: {disease_results.get('error')}")
+            elif not disease_primary:
+                print(f"   ⚠️  Disease classifier available but no primary result")
+        
+        # Build detailed model information for LLM and frontend
+        model_details = {
+            'species_classifier': {
+                'model_name': 'Unified Species Classifier',
+                'description': 'Combines houseplant species, PlantNet species, and PlantVillage healthy classes',
+                'num_classes': species_results.get('num_classes', 0),
+                'available': species_results.get('available', False),
+                'top_predictions': species_results.get('top_k', [])[:5],
+                'primary': species_primary
+            },
+            'disease_classifier': {
+                'model_name': 'Disease Classifier',
+                'description': 'Trained on PlantVillage dataset to identify specific plant diseases',
+                'num_classes': disease_results.get('num_classes', 0),
+                'available': disease_results.get('available', False),
+                'top_predictions': disease_results.get('top_k', [])[:5],
+                'primary': disease_primary
+            },
+            'lesion_analysis': {
+                'method': 'Image Processing (HSV color analysis)',
+                'description': 'Detects lesions through color analysis (yellowing, browning)',
+                'num_leaves': int(leaf_detection['num_leaves']),
+                'overall_health_score': float(overall_health_score),
+                'has_issues': bool(has_potential_issues),
+                'individual_leaves': leaf_analyses
+            }
+        }
+        
         leaf_analysis_data = {
             'num_leaves_detected': int(leaf_detection['num_leaves']),
             'overall_health_score': float(overall_health_score),
             'has_potential_issues': bool(has_potential_issues),
-            'individual_leaves': leaf_analyses
+            'individual_leaves': leaf_analyses,
+            'disease_classifier': disease_results if disease_results.get('available') else None,
+            'disease_confidence': disease_confidence,  # Pass disease classifier confidence
+            'model_details': model_details  # Include detailed model info for LLM
         }
         
         # Check if user wants LLM or rule-based (default: try LLM first)
@@ -154,38 +240,40 @@ def diagnose():
         synthesis_result = diagnosis_engine.synthesize_diagnosis(
             plant_species=primary_plant,
             leaf_analysis=leaf_analysis_data,
-            use_llm=use_llm
+            use_llm=use_llm,
+            multi_model_results=None  # Using model_details instead
         )
         
         # Calculate processing time
         processing_time_ms = int((time.time() - start_time) * 1000)
         
         # Build response with synthesized diagnosis
-        # Add 'name' field for frontend compatibility (prioritizes common_name over species_name)
-        primary_plant_formatted = plant_results["primary"].copy() if plant_results.get("primary") else {}
-        if primary_plant_formatted:
-            # Set 'name' to common_name if available, otherwise use species_name
-            common_name = primary_plant_formatted.get("common_name", "")
-            species_name = primary_plant_formatted.get("species_name", "Unknown")
-            primary_plant_formatted["name"] = common_name if common_name and common_name != species_name else species_name
+        # Format species results for frontend
+        primary_plant_formatted = {
+            'species_name': species_primary.get('species', 'Unknown'),
+            'common_name': species_primary.get('species', 'Unknown'),
+            'name': species_primary.get('species', 'Unknown'),
+            'confidence': species_primary.get('confidence', 0.0)
+        } if species_primary else {}
         
         # Format top_5 for frontend compatibility
         top_5_formatted = []
-        for item in plant_results.get("top_k", []):
-            item_copy = item.copy()
-            # Set 'name' to common_name if available, otherwise use species_name
-            item_common = item_copy.get("common_name", "")
-            item_scientific = item_copy.get("species_name", "Unknown")
-            item_copy["name"] = item_common if item_common and item_common != item_scientific else item_scientific
-            top_5_formatted.append(item_copy)
+        for item in species_results.get("top_k", []):
+            species_name = item.get('species', 'Unknown')
+            top_5_formatted.append({
+                'species_name': species_name,
+                'common_name': species_name,
+                'name': species_name,
+                'confidence': item.get('confidence', 0.0)
+            })
         
-        # Format disease_detection primary for frontend compatibility
-        disease_primary = None
-        if synthesis_result['final_diagnosis'].get('severity') != 'none':
-            disease_primary = {
-                "disease": synthesis_result['final_diagnosis'].get('condition', 'Unknown condition'),
-                "common_name": primary_plant.get('common_name', ''),
-                "confidence": synthesis_result['final_diagnosis'].get('confidence', 0.0),
+        # Format disease results for frontend (NO PLANT NAMES - just disease type)
+        disease_primary_formatted = None
+        if disease_primary and disease_results.get('available'):
+            disease_primary_formatted = {
+                "disease": disease_primary.get('disease', 'Unknown'),
+                "condition": disease_primary.get('condition', 'Unknown'),
+                "confidence": disease_primary.get('confidence', 0.0),
                 "affected_area_percent": (1.0 - leaf_analysis_data['overall_health_score']) * 100 if leaf_analysis_data.get('overall_health_score') else 0.0
             }
         
@@ -194,35 +282,77 @@ def diagnose():
             "diagnosis": {
                 "plant_species": {
                     "primary": primary_plant_formatted,
-                    "top_5": top_5_formatted
+                    "top_5": top_5_formatted,
+                    "model_source": "unified_species_classifier"
                 },
+                # Keep disease_detection for leaf_analysis only (not displayed as separate section)
                 "disease_detection": {
+                    # Leaf analysis (image processing-based health assessment)
                     "leaf_analysis": {
                         "num_leaves_detected": int(leaf_detection['num_leaves']),
                         "overall_health_score": round(float(overall_health_score), 3),
-                        "has_potential_issues": bool(has_potential_issues),  # Ensure Python bool
+                        "has_potential_issues": bool(has_potential_issues),
                         "individual_leaves": leaf_analyses,
                         "leaf_boxes": leaf_boxes  # All leaf bounding boxes for visualization
-                    },
-                    "primary": disease_primary,
-                    "all_diseases": {}
+                    }
                 },
                 "final_diagnosis": synthesis_result['final_diagnosis'],
                 "treatment_plan": synthesis_result['treatment_plan'],
+                "model_results": {
+                    # Tabular data for frontend display
+                    "species_predictions": [
+                        {
+                            "rank": i + 1,
+                            "species": pred.get('species', 'Unknown'),
+                            "confidence": f"{pred.get('confidence', 0)*100:.1f}%"
+                        }
+                        for i, pred in enumerate(species_results.get('top_k', [])[:10])
+                    ],
+                    "disease_predictions": [
+                        {
+                            "rank": i + 1,
+                            "disease": pred.get('disease', 'Unknown'),
+                            "condition": pred.get('condition', 'Unknown'),
+                            "confidence": f"{pred.get('confidence', 0)*100:.1f}%"
+                        }
+                        for i, pred in enumerate(disease_results.get('top_k', [])[:10])
+                    ],
+                    "leaf_analysis_table": [
+                        {
+                            "leaf": f"Leaf {i+1}",
+                            "health_score": f"{leaf.get('health_score', 0):.2f}",
+                            "lesion_pct": f"{leaf.get('lesion_percentage', 0):.1f}%",
+                            "green_pct": f"{leaf.get('green_percentage', 0):.1f}%",
+                            "lesion_regions": leaf.get('num_lesion_regions', 0),
+                            "has_issues": "Yes" if leaf.get('has_potential_issues') else "No"
+                        }
+                        for i, leaf in enumerate(leaf_analyses)
+                    ],
+                    "model_details": model_details
+                },
                 "metadata": {
                     "timestamp": datetime.utcnow().isoformat(),
                     "processing_time_ms": processing_time_ms,
                     "image_name": secure_filename(file.filename),
                     "model_versions": {
-                        "plant_classification": "Dual Classifier (Houseplant + PlantNet)",
-                        "selected_model": plant_results.get("dual_classifier", {}).get("selected_model", "plantnet"),
-                        "plantnet": "EfficientNet B4",
-                        "houseplant": "EfficientNet B4 (Fine-tuned)" if plant_results.get("dual_classifier", {}).get("houseplant_available", False) else "Not available",
+                        "plant_classification": "Unified Species Classifier",
+                        "disease_classification": "Disease Classifier",
+                        "species_model": "unified_species_classifier",
+                        "disease_model": "disease_classifier",
+                        "species_available": species_results.get('available', False),
+                        "disease_available": disease_results.get('available', False),
                         "leaf_detection": "YOLO11x",
                         "lesion_analysis": "Image Processing",
                         "llm": "Mistral 7B" if synthesis_result.get('source') == 'llm' else "Rule-Based"
                     },
-                    "dual_classifier": plant_results.get("dual_classifier", {}),
+                    "species_classifier": {
+                        "available": species_results.get('available', False),
+                        "num_classes": species_results.get('num_classes', 0)
+                    },
+                    "disease_classifier": {
+                        "available": disease_results.get('available', False),
+                        "num_classes": disease_results.get('num_classes', 0)
+                    },
                     "diagnosis_source": synthesis_result.get('source', 'rule_based')
                 }
             },

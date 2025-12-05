@@ -174,6 +174,100 @@ def show_plant_species(plant_species):
         st.bar_chart(chart_data.set_index("Species"), height=400,horizontal=True)
 
 
+def show_multi_model_comparison(multi_model_data):
+    """Show side-by-side comparison of all model predictions."""
+    if not multi_model_data:
+        return
+    
+    st.subheader("🤖 Multi-Model Comparison")
+    st.caption("Results from different AI models analyzing the same image")
+    
+    # Create columns for each model
+    cols = st.columns(3)
+    
+    # PlantNet Model
+    with cols[0]:
+        st.markdown("#### 🌍 PlantNet")
+        plantnet = multi_model_data.get("plantnet", {})
+        if plantnet.get("available"):
+            primary = plantnet.get("primary", {})
+            st.markdown(f"**{primary.get('species_name', 'Unknown')}**")
+            st.caption(f"Common: {primary.get('common_name', 'N/A')}")
+            conf = primary.get("confidence", 0.0)
+            if conf >= 0.8:
+                st.success(f"Confidence: {conf:.0%}")
+            elif conf >= 0.6:
+                st.info(f"Confidence: {conf:.0%}")
+            else:
+                st.warning(f"Confidence: {conf:.0%}")
+        else:
+            st.error("Not available")
+            if plantnet.get("error"):
+                st.caption(f"Error: {plantnet.get('error')[:30]}...")
+    
+    # Houseplant Model
+    with cols[1]:
+        st.markdown("#### 🏠 Houseplant")
+        houseplant = multi_model_data.get("houseplant", {})
+        if houseplant.get("available"):
+            primary = houseplant.get("primary", {})
+            st.markdown(f"**{primary.get('species_name', 'Unknown')}**")
+            st.caption(f"Common: {primary.get('common_name', 'N/A')}")
+            conf = primary.get("confidence", 0.0)
+            if conf >= 0.8:
+                st.success(f"Confidence: {conf:.0%}")
+            elif conf >= 0.6:
+                st.info(f"Confidence: {conf:.0%}")
+            else:
+                st.warning(f"Confidence: {conf:.0%}")
+        else:
+            st.info("Not available")
+            if houseplant.get("error"):
+                st.caption(f"Error: {houseplant.get('error')[:30]}...")
+    
+    # LLaVA Model
+    with cols[2]:
+        st.markdown("#### 👁️ LLaVA Vision")
+        llava = multi_model_data.get("llava", {})
+        if llava.get("available"):
+            plant_id = llava.get("plant_identification", {})
+            lesion = llava.get("lesion_analysis", {})
+            
+            st.markdown(f"**{plant_id.get('species_name', 'Unknown')}**")
+            st.caption(f"Common: {plant_id.get('common_name', 'N/A')}")
+            
+            conf_level = plant_id.get("confidence", "medium")
+            if conf_level == "high":
+                st.success(f"Confidence: {conf_level}")
+            elif conf_level == "medium":
+                st.info(f"Confidence: {conf_level}")
+            else:
+                st.warning(f"Confidence: {conf_level}")
+            
+            # Show lesion detection
+            if lesion.get("has_lesions"):
+                st.error(f"⚠️ Lesions: {lesion.get('affected_percentage', 0):.1f}%")
+                st.caption(f"Type: {lesion.get('lesion_type', 'Unknown')}")
+            else:
+                st.success("✅ No lesions")
+        else:
+            st.info("Not available")
+            if llava.get("error"):
+                st.caption(f"Error: {llava.get('error')[:30]}...")
+    
+    # Show LLaVA reasoning if available
+    if llava.get("available") and llava.get("plant_identification", {}).get("reasoning"):
+        with st.expander("📝 LLaVA Detailed Analysis"):
+            reasoning = llava.get("plant_identification", {}).get("reasoning", "")
+            if reasoning:
+                st.write(reasoning)
+            
+            lesion_reasoning = llava.get("lesion_analysis", {}).get("reasoning", "")
+            if lesion_reasoning:
+                st.markdown("**Lesion Analysis:**")
+                st.write(lesion_reasoning)
+
+
 def show_disease_section(disease_detection):
     """show disease detection with visual indicators"""
     if not disease_detection:
@@ -210,35 +304,45 @@ def show_final_diagnosis(final_diagnosis):
     if not final_diagnosis:
         return
 
-    st.subheader("📋 Final Diagnosis")
+    st.markdown("### 📋 Final Diagnosis")
 
+    # Get values directly from final_diagnosis (these come from the LLM/rule-based diagnosis)
     condition = final_diagnosis.get("condition", "not available")
     conf = final_diagnosis.get("confidence", 0.0)
     severity = final_diagnosis.get("severity", "not specified")
     reasoning = final_diagnosis.get("reasoning", "")
 
     severity_colors = {
-        "low": "🟢",
-        "medium": "🟡",
+        "none": "🟢",
+        "low": "🟡",
+        "moderate": "🟠",
+        "medium": "🟠",
         "high": "🔴",
         "critical": "⛔"
     }
     severity_emoji = severity_colors.get(severity.lower(), "❓")
 
+    # Display metrics - these now match the actual diagnosis
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.metric("Condition", condition)
     
     with col2:
-        st.metric("Confidence", f"{conf:.0%}")
+        # Confidence from diagnosis (higher = more confident in the diagnosis)
+        st.metric("Confidence", f"{conf:.1%}")
     
     with col3:
         st.markdown(f"**Severity:** {severity_emoji} {severity.title()}")
 
+    # Full reasoning explanation
     if reasoning:
-        with st.expander("📖 Why This Diagnosis"):
-            st.write(reasoning)
+        st.markdown("---")
+        st.markdown("#### 📖 Detailed Explanation")
+        # Use full reasoning if available, otherwise use reasoning
+        reasoning_text = final_diagnosis.get('reasoning_full', reasoning)
+        st.markdown(reasoning_text)
+        st.caption("💡 This explanation combines AI model predictions with expert analysis")
 
 
 def draw_bounding_boxes(image, leaf_boxes, individual_leaves=None):
@@ -543,42 +647,89 @@ def main():
 
             st.markdown("---")
 
-            if plant:
-                show_plant_species(plant)
-                st.markdown("---")
-
-            if disease:
-                show_disease_section(disease)
-                st.markdown("---")
-
-            if final_diag:
-                show_final_diagnosis(final_diag)
-                st.markdown("---")
-
-            if plan:
-                show_treatment_plan(plan)
-                st.markdown("---")
-
+            # Use tabs for different sections
+            tab1, tab2, tab3, tab4 = st.tabs(["📋 Diagnosis", "🌿 Species", "📊 Model Results", "🍃 Leaf Analysis"])
+            
+            # Tab 1: Final Diagnosis
+            with tab1:
+                if final_diag:
+                    show_final_diagnosis(final_diag)
+                else:
+                    st.info("No diagnosis available")
+            
+            # Tab 2: Plant Species
+            with tab2:
+                if plant:
+                    show_plant_species(plant)
+                    
+                    # Show multi-model comparison if available
+                    multi_model = plant.get("multi_model_comparison")
+                    if multi_model:
+                        st.markdown("---")
+                        show_multi_model_comparison(multi_model)
+                else:
+                    st.info("No species identification available")
+            
+            # Tab 3: Model Results (Raw predictions)
+            with tab3:
+                model_results = diagnosis.get("model_results", {})
+                if model_results:
+                    st.markdown("### 📊 Raw Model Predictions")
+                    st.caption("Detailed predictions from AI models")
+                    
+                    # Species predictions table
+                    species_table = model_results.get("species_predictions", [])
+                    if species_table:
+                        st.markdown("#### 🌿 Species Classifier")
+                        df_species = pd.DataFrame(species_table)
+                        st.dataframe(df_species, use_container_width=True, hide_index=True)
+                        st.caption(f"Top {len(species_table)} species predictions from unified classifier")
+                        st.markdown("---")
+                    
+                    # Disease predictions table
+                    disease_table = model_results.get("disease_predictions", [])
+                    if disease_table:
+                        st.markdown("#### 🦠 Disease Classifier")
+                        df_disease = pd.DataFrame(disease_table)
+                        st.dataframe(df_disease, use_container_width=True, hide_index=True)
+                        st.caption(f"Top {len(disease_table)} disease predictions from PlantVillage-trained model")
+                else:
+                    st.info("No model results available")
+            
+            # Tab 4: Leaf Analysis
+            with tab4:
+                disease = diagnosis.get("disease_detection", {})
+                if disease and disease.get("leaf_analysis"):
+                    leaf_analysis = disease["leaf_analysis"]
+                    
+                    # Summary metrics
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Leaves Detected", leaf_analysis.get('num_leaves_detected', 0))
+                    with col2:
+                        st.metric("Overall Health", f"{leaf_analysis.get('overall_health_score', 0):.0%}")
+                    with col3:
+                        status = "⚠️ Issues" if leaf_analysis.get('has_potential_issues') else "✅ Good"
+                        st.metric("Status", status)
+                    
+                    st.markdown("---")
+                    
+                    # Individual leaf analysis table
+                    model_results = diagnosis.get("model_results", {})
+                    leaf_table = model_results.get("leaf_analysis_table", [])
+                    if leaf_table:
+                        st.markdown("#### Individual Leaf Details")
+                        df_leaves = pd.DataFrame(leaf_table)
+                        st.dataframe(df_leaves, use_container_width=True, hide_index=True)
+                        st.caption("Detailed analysis for each detected leaf")
+                else:
+                    st.info("No leaf analysis available")
+            
+            # Metadata footer
             if metadata:
                 ms = metadata.get("processing_time_ms")
                 if ms:
-                    st.caption(f"⏱️ {ms}ms")
-
-            # Leaf details
-            if disease and disease.get("leaf_analysis"):
-                st.markdown("---")
-                st.markdown("### 📈 Leaf Analysis")
-                
-                leaf_analysis = disease["leaf_analysis"]
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Leaves", leaf_analysis.get('num_leaves_detected', 0))
-                with col2:
-                    st.metric("Health", f"{leaf_analysis.get('overall_health_score', 0):.0%}")
-                with col3:
-                    status = "⚠️ Issues" if leaf_analysis.get('has_potential_issues') else "✅ Good"
-                    st.metric("Status", status)
+                    st.caption(f"⏱️ Processing time: {ms}ms")
 
 
 if __name__ == "__main__":

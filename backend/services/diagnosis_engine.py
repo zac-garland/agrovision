@@ -18,7 +18,8 @@ class DiagnosisEngine:
         self,
         plant_species: Dict,
         leaf_analysis: Dict,
-        use_llm: bool = True
+        use_llm: bool = True,
+        multi_model_results: Optional[Dict] = None
     ) -> Dict:
         """
         Synthesize diagnosis from all available data.
@@ -35,24 +36,24 @@ class DiagnosisEngine:
             - 'source': 'llm' or 'rule_based'
         """
         if use_llm and self.llm.available:
-            return self._llm_diagnosis(plant_species, leaf_analysis)
+            return self._llm_diagnosis(plant_species, leaf_analysis, multi_model_results)
         else:
             return self._rule_based_diagnosis(plant_species, leaf_analysis)
     
-    def _llm_diagnosis(self, plant_species: Dict, leaf_analysis: Dict) -> Dict:
+    def _llm_diagnosis(self, plant_species: Dict, leaf_analysis: Dict, multi_model_results: Optional[Dict] = None) -> Dict:
         """Generate diagnosis using LLM."""
         try:
             # Build prompt from all available data
-            prompt = self._build_diagnosis_prompt(plant_species, leaf_analysis)
+            prompt = self._build_diagnosis_prompt(plant_species, leaf_analysis, multi_model_results)
             
             system_prompt = self._get_system_prompt()
             
-            # Generate reasoning
+            # Generate reasoning with more tokens to prevent cutoff
             result = self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.7,
-                max_tokens=512
+                max_tokens=1024  # Increased from 512 to prevent text cutoff
             )
             
             if result['success']:
@@ -73,8 +74,30 @@ class DiagnosisEngine:
         health_score = leaf_analysis.get('overall_health_score', 1.0)
         has_issues = leaf_analysis.get('has_potential_issues', False)
         
-        # Determine condition and severity
-        if health_score >= 0.8:
+        # Get lesion metrics - lesion detection is the PRIMARY indicator
+        individual_leaves = leaf_analysis.get('individual_leaves', [])
+        avg_lesion_pct = 0.0
+        if individual_leaves:
+            avg_lesion_pct = sum(leaf.get('lesion_percentage', 0) for leaf in individual_leaves) / len(individual_leaves)
+        
+        # PRIORITY: If lesions are detected (has_issues or lesion_pct > 3%), 
+        # override health score logic - lesions take precedence
+        if has_issues or avg_lesion_pct > 3.0:
+            # Determine severity based on lesion percentage (primary indicator)
+            if avg_lesion_pct > 10.0:
+                condition = "Significant health problems detected"
+                severity = "high"
+                reasoning = f"Serious health issues detected in the {plant_species.get('common_name', 'plant')}. Lesion coverage: {avg_lesion_pct:.1f}% indicates significant damage."
+            elif avg_lesion_pct > 5.0:
+                condition = "Moderate health issues detected"
+                severity = "moderate"
+                reasoning = f"Several health issues detected in the {plant_species.get('common_name', 'plant')}. Lesion coverage: {avg_lesion_pct:.1f}% indicates visible damage."
+            else:
+                condition = "Minor health concerns detected"
+                severity = "low"
+                reasoning = f"Some signs of stress or minor issues detected in the {plant_species.get('common_name', 'plant')}. Lesion coverage: {avg_lesion_pct:.1f}% indicates early-stage concerns."
+        # Only consider healthy if no issues detected AND health score is high
+        elif health_score >= 0.8:
             condition = "Plant appears healthy"
             severity = "none"
             reasoning = f"The {plant_species.get('common_name', 'plant')} appears to be in good health. The leaf analysis shows {health_score*100:.0f}% health score."
@@ -94,10 +117,26 @@ class DiagnosisEngine:
         # Generate treatment plan based on severity
         treatment_plan = self._generate_treatment_plan(severity, health_score, leaf_analysis)
         
+        # Use disease classifier confidence if available, otherwise use symptom-based confidence
+        disease_confidence = leaf_analysis.get('disease_confidence', 0.0)
+        if disease_confidence is not None and disease_confidence > 0:
+            confidence = float(disease_confidence)
+        else:
+            # When disease classifier not available, base confidence on lesion severity
+            if has_issues or avg_lesion_pct > 3.0:
+                if avg_lesion_pct > 10.0:
+                    confidence = 0.65  # High confidence when severe symptoms
+                elif avg_lesion_pct > 5.0:
+                    confidence = 0.50  # Moderate confidence
+                else:
+                    confidence = 0.35  # Lower confidence for mild symptoms
+            else:
+                confidence = 0.30  # Low confidence when healthy
+        
         return {
             'final_diagnosis': {
                 'condition': condition,
-                'confidence': round(1.0 - health_score, 3) if health_score < 1.0 else 0.0,
+                'confidence': round(confidence, 3),  # Use disease classifier confidence
                 'severity': severity,
                 'reasoning': reasoning
             },
@@ -105,13 +144,17 @@ class DiagnosisEngine:
             'source': 'rule_based'
         }
     
-    def _build_diagnosis_prompt(self, plant_species: Dict, leaf_analysis: Dict) -> str:
+    def _build_diagnosis_prompt(self, plant_species: Dict, leaf_analysis: Dict, multi_model_results: Optional[Dict] = None) -> str:
         """Build prompt for LLM diagnosis."""
         plant_name = plant_species.get('common_name', 'Unknown plant')
         scientific_name = plant_species.get('species_name', 'Unknown')
         health_score = leaf_analysis.get('overall_health_score', 1.0)
         num_leaves = leaf_analysis.get('num_leaves_detected', 1)
         has_issues = leaf_analysis.get('has_potential_issues', False)
+        
+        # Extract base name from hierarchical format (e.g., "Begonia (rex)" -> "Begonia")
+        if plant_name and '(' in plant_name:
+            plant_name = plant_name.split('(')[0].strip()
         
         # Use common name as the primary name, fallback to extracting from scientific name if needed
         if plant_name == 'Unknown plant' or not plant_name or plant_name == scientific_name:
@@ -162,29 +205,111 @@ LEAF DETAILS:"""
   - Green Percentage: {green_pct:.1f}% (secondary indicator - note: many healthy plants aren't green)
   - Health Score: {leaf.get('health_score', 0):.2f}"""
         
+        # Add model details if available (new unified classifiers)
+        model_details = leaf_analysis.get('model_details', {})
+        if model_details:
+            prompt += "\n\nAI MODEL PREDICTIONS (Raw model outputs for your analysis):\n"
+            
+            # Species classifier results
+            species_info = model_details.get('species_classifier', {})
+            if species_info.get('available'):
+                prompt += f"""
+SPECIES CLASSIFIER MODEL:
+- Model: {species_info.get('model_name', 'Unified Species Classifier')}
+- Description: {species_info.get('description', '')}
+- Number of classes: {species_info.get('num_classes', 0)}
+- Primary Prediction: {species_info.get('primary', {}).get('species', 'Unknown')}
+- Confidence: {species_info.get('primary', {}).get('confidence', 0)*100:.1f}%
+- Top 5 Predictions:"""
+                for i, pred in enumerate(species_info.get('top_predictions', [])[:5], 1):
+                    prompt += f"\n  {i}. {pred.get('species', 'Unknown')} ({pred.get('confidence', 0)*100:.1f}%)"
+            
+            # Disease classifier results
+            disease_info = model_details.get('disease_classifier', {})
+            if disease_info.get('available'):
+                disease_primary = disease_info.get('primary', {})
+                prompt += f"""
+DISEASE CLASSIFIER MODEL:
+- Model: {disease_info.get('model_name', 'Disease Classifier')}
+- Description: {disease_info.get('description', '')}
+- Number of classes: {disease_info.get('num_classes', 0)}
+- Primary Disease Prediction: {disease_primary.get('disease', 'Unknown')}
+- Plant: {disease_primary.get('plant', 'Unknown')}
+- Condition: {disease_primary.get('condition', 'Unknown')}
+- Confidence: {disease_primary.get('confidence', 0)*100:.1f}%
+- Top 5 Disease Predictions:"""
+                for i, pred in enumerate(disease_info.get('top_predictions', [])[:5], 1):
+                    prompt += f"\n  {i}. {pred.get('disease', 'Unknown')} on {pred.get('plant', 'Unknown')} ({pred.get('confidence', 0)*100:.1f}%)"
+            
+            # Lesion analysis info
+            lesion_info = model_details.get('lesion_analysis', {})
+            if lesion_info:
+                prompt += f"""
+LESION ANALYSIS (Image Processing):
+- Method: {lesion_info.get('method', 'HSV color analysis')}
+- Description: {lesion_info.get('description', '')}
+- Leaves analyzed: {lesion_info.get('num_leaves', 0)}
+- Overall health score: {lesion_info.get('overall_health_score', 0):.2f}
+- Issues detected: {'Yes' if lesion_info.get('has_issues') else 'No'}"""
+            
+            prompt += "\n\nIMPORTANT: Use the disease classifier model predictions as the PRIMARY source for disease identification. Combine this with lesion analysis to provide a comprehensive diagnosis. If the disease classifier identifies a specific disease, prioritize that in your diagnosis."
+        
+        # Add multi-model comparison if available (legacy support)
+        if multi_model_results:
+            prompt += "\n\nLEGACY MODEL COMPARISON (Additional models for reference):\n"
+            
+            # PlantNet results
+            plantnet_data = multi_model_results.get('plantnet', {})
+            if plantnet_data.get('available'):
+                plantnet_primary = plantnet_data.get('primary', {})
+                prompt += f"""
+- PlantNet Model (General plant database):
+  * Species: {plantnet_primary.get('species_name', 'Unknown')}
+  * Common Name: {plantnet_primary.get('common_name', 'N/A')}
+  * Confidence: {plantnet_primary.get('confidence', 0)*100:.1f}%"""
+            
+            prompt += "\n\nIMPORTANT: Consider all model predictions when making your diagnosis. The disease classifier model is the most reliable for disease identification."
+        
         prompt += f"""
 
-Based on this information, provide:
-1. A clear diagnosis of this {plant_name}'s condition (use the common name "{plant_name}")
-   - Focus primarily on the lesion coverage and lesion regions detected
-   - Lesion percentage is the main health indicator
-   - Do not rely heavily on green color as many healthy plants have non-green leaves
-2. An assessment of severity (none/low/moderate/high)
-   - Base severity primarily on lesion percentage: <3% = none/low, 3-10% = moderate, >10% = high
-3. A brief explanation of your reasoning
-   - Explain what the lesion coverage indicates
-   - Mention specific concerns based on lesion regions detected
-4. Practical treatment recommendations organized by:
-   - Immediate actions (within 24 hours)
-   - Week 1 care steps
-   - Weeks 2-3 care steps
-   - Ongoing monitoring advice
+Based on this information, provide a comprehensive diagnosis:
 
-IMPORTANT: 
-- Always use the common name "{plant_name}" when referring to the plant in your response
-- Focus on lesion detection as the primary health indicator
-- Do not assume that low green percentage indicates poor health (many healthy plants are purple, red, variegated, etc.)
-- Format your response as clear, actionable advice for a home gardener."""
+1. DIAGNOSIS (use the common name "{plant_name}"):
+   - Primary condition: What is the main health issue? If the disease classifier identified a specific disease, prioritize that.
+   - Severity assessment: none/low/moderate/high based on:
+     * Disease classifier confidence and prediction
+     * Lesion coverage percentage (<3% = none/low, 3-10% = moderate, >10% = high)
+     * Number of lesion regions detected
+   - Note: Lesion percentage is the main health indicator. Green color is less relevant.
+
+2. DETAILED REASONING (explain thoroughly - this section can be longer):
+   - Explain what the disease classifier model detected and why it's significant
+   - Describe what the lesion coverage indicates about plant health
+   - Mention specific concerns based on lesion regions detected
+   - If disease classifier and lesion analysis agree/disagree, explain the consensus
+   - Reference the model predictions to support your diagnosis
+   - Be specific about what each metric means for this {plant_name}
+
+3. TREATMENT PLAN (organized by timeline):
+   - Immediate actions (within 24 hours): Specific steps to take right away
+   - Week 1 care steps: Daily/weekly actions for the first week
+   - Weeks 2-3 care steps: Continued care for weeks 2-3
+   - Ongoing monitoring advice: What to watch for and when to reassess
+
+4. MODEL EXPLANATION (help user understand the AI predictions):
+   - Briefly explain what the species classifier found
+   - Explain what the disease classifier detected and why it matters
+   - Clarify how lesion analysis complements the disease classifier
+   - Help the user understand the confidence levels
+
+IMPORTANT GUIDELINES: 
+- Always use the common name "{plant_name}" when referring to the plant
+- Focus on disease classifier predictions as PRIMARY source for disease identification
+- Use lesion detection as PRIMARY health indicator (not green color)
+- Provide detailed reasoning - don't cut explanations short
+- Be thorough in explaining what the models detected and why it matters
+- Format your response as clear, actionable advice for a home gardener
+- Your reasoning section should be comprehensive and explain the model outputs clearly"""
         
         return prompt
     
@@ -211,39 +336,87 @@ Use simple, everyday language that non-experts can understand."""
         # Extract key information from LLM response
         # For now, use the text as reasoning and extract structured parts
         
-        health_score = leaf_analysis.get('overall_health_score', 1.0)
-        
         # Replace scientific names with common names in the response
         text = self._replace_scientific_names(text, plant_species)
         
         # Simple extraction - can be improved with better parsing
         lines = text.split('\n')
         
-        # Try to extract condition
+        # Try to extract condition and severity from LLM response
         condition = "Plant health assessment"
         severity = "moderate"
         
+        # Look for condition/diagnosis line
         for line in lines:
-            if 'diagnosis' in line.lower() or 'condition' in line.lower():
-                condition = line.strip().lstrip('-').lstrip('*').strip()
-                if len(condition) > 100:
-                    condition = condition[:100] + "..."
-            if any(s in line.lower() for s in ['severe', 'serious', 'critical']):
-                severity = "high"
-            elif any(s in line.lower() for s in ['minor', 'slight', 'low']):
-                severity = "low"
-            elif 'healthy' in line.lower():
-                severity = "none"
+            line_lower = line.lower()
+            if 'diagnosis' in line_lower or 'condition' in line_lower or 'primary condition' in line_lower:
+                # Extract condition text
+                condition_text = line.strip().lstrip('-').lstrip('*').lstrip('1.').lstrip().strip()
+                # Remove common prefixes
+                for prefix in ['diagnosis:', 'condition:', 'primary condition:', 'diagnosis -', 'condition -']:
+                    if condition_text.lower().startswith(prefix.lower()):
+                        condition_text = condition_text[len(prefix):].strip()
+                if condition_text and len(condition_text) > 5:
+                    condition = condition_text
+                    if len(condition) > 150:
+                        condition = condition[:150] + "..."
+                    break
+        
+        # Look for severity indicators
+        text_lower = text.lower()
+        if any(s in text_lower for s in ['severe', 'serious', 'critical', 'high severity', 'severity: high']):
+            severity = "high"
+        elif any(s in text_lower for s in ['moderate', 'medium', 'severity: moderate', 'severity: medium']):
+            severity = "moderate"
+        elif any(s in text_lower for s in ['minor', 'slight', 'low severity', 'severity: low']):
+            severity = "low"
+        elif any(s in text_lower for s in ['healthy', 'no issues', 'severity: none', 'severity: none']):
+            severity = "none"
+        
+        # Use disease classifier confidence if available, otherwise use a reasonable default
+        disease_confidence = leaf_analysis.get('disease_confidence', 0.0)
+        
+        # Check if we have a valid disease confidence (not None, not 0, and > 0)
+        if disease_confidence is not None and disease_confidence > 0:
+            confidence = float(disease_confidence)
+            print(f"   ✅ Using disease classifier confidence: {confidence:.3f} ({confidence*100:.1f}%)")
+        else:
+            # When disease classifier not available, use a moderate confidence based on lesion analysis
+            # This is better than using 1.0 - health_score which gives confusing values
+            has_issues = leaf_analysis.get('has_potential_issues', False)
+            individual_leaves = leaf_analysis.get('individual_leaves', [])
+            avg_lesion_pct = 0.0
+            if individual_leaves:
+                avg_lesion_pct = sum(leaf.get('lesion_percentage', 0) for leaf in individual_leaves) / len(individual_leaves)
+            
+            # Base confidence on how clear the symptoms are
+            # More lesions = higher confidence in diagnosis (but cap at 0.7 since no model confirmation)
+            if has_issues and avg_lesion_pct > 5.0:
+                confidence = 0.65  # Moderate-high confidence when clear symptoms
+            elif has_issues and avg_lesion_pct > 3.0:
+                confidence = 0.50  # Moderate confidence when some symptoms
+            elif has_issues:
+                confidence = 0.35  # Lower confidence when minimal symptoms
+            else:
+                confidence = 0.30  # Low confidence when no clear issues (healthy)
+            
+            print(f"   ⚠️  Disease classifier unavailable - using symptom-based confidence: {confidence:.3f} ({confidence*100:.1f}%)")
+            print(f"      (lesion_pct: {avg_lesion_pct:.1f}%, has_issues: {has_issues})")
         
         # Extract treatment plan sections
         treatment_plan = self._extract_treatment_plan(text)
         
+        # Use full text for reasoning (don't truncate - let frontend handle display)
+        # Frontend can use expander or scrollable area for long text
+        reasoning = text.strip()
+        
         return {
             'final_diagnosis': {
                 'condition': condition,
-                'confidence': round(1.0 - health_score, 3) if health_score < 1.0 else 0.0,
+                'confidence': round(confidence, 3),  # Use disease classifier confidence
                 'severity': severity,
-                'reasoning': text[:500]  # First 500 chars as reasoning
+                'reasoning': reasoning,  # Full reasoning text (not truncated)
+                'reasoning_full': reasoning  # Keep full text for detailed view
             },
             'treatment_plan': treatment_plan,
             'source': 'llm'
@@ -256,10 +429,24 @@ Use simple, everyday language that non-experts can understand."""
         common_name = plant_species.get('common_name', '')
         scientific_name = plant_species.get('species_name', '')
         
+        # Extract base name from hierarchical format (e.g., "Begonia (rex)" -> "Begonia")
+        base_common_name = common_name
+        if common_name and '(' in common_name:
+            # Extract the part before the parenthesis
+            base_common_name = common_name.split('(')[0].strip()
+        
+        # First, replace "(for this plant)" and "this plant" with the actual plant name
+        if base_common_name:
+            text = re.sub(r'\(for this plant\)', base_common_name, text, flags=re.IGNORECASE)
+            text = re.sub(r'\bfor this plant\b', base_common_name, text, flags=re.IGNORECASE)
+            text = re.sub(r'\bthis plant\b', base_common_name, text, flags=re.IGNORECASE)
+            text = re.sub(r'\bthe plant\b', base_common_name, text, flags=re.IGNORECASE)
+        
         # If we have a scientific name, always try to replace it
         if scientific_name and scientific_name != 'Unknown':
             # Replace full scientific name (case-insensitive)
-            text = re.sub(re.escape(scientific_name), common_name if common_name else 'this plant', text, flags=re.IGNORECASE)
+            replacement = base_common_name if base_common_name else common_name if common_name else 'this plant'
+            text = re.sub(re.escape(scientific_name), replacement, text, flags=re.IGNORECASE)
             
             # Extract genus (first word) from scientific name
             genus = scientific_name.split()[0] if scientific_name else ''
@@ -267,10 +454,10 @@ Use simple, everyday language that non-experts can understand."""
             # Replace standalone genus references (word boundaries)
             if genus and len(genus) > 2:
                 # Only replace if genus is different from common name (to avoid replacing already correct names)
-                if not common_name or genus.lower() != common_name.lower():
+                if not base_common_name or genus.lower() != base_common_name.lower():
                     # Replace "genus" when it appears as a standalone word
                     pattern = r'\b' + re.escape(genus) + r'\b'
-                    replacement = common_name if common_name and common_name != scientific_name else 'this plant'
+                    replacement = base_common_name if base_common_name else common_name if common_name else 'this plant'
                     text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
         
         # Also handle common genus names that might need better common names
@@ -282,16 +469,22 @@ Use simple, everyday language that non-experts can understand."""
             'Sansevieria': 'Snake Plant',
             'Dracaena': 'Dracaena',
             'Philodendron': 'Philodendron',
+            'Begonia': 'Begonia',  # Keep Begonia as is
         }
         
         # If common_name is just a genus, try to improve it
-        if common_name and common_name in genus_common_names:
-            better_name = genus_common_names[common_name]
+        if base_common_name and base_common_name in genus_common_names:
+            better_name = genus_common_names[base_common_name]
             # Replace the genus with better name only if they're different
-            if better_name.lower() != common_name.lower():
-                pattern = r'\b' + re.escape(common_name) + r'\b'
+            if better_name.lower() != base_common_name.lower():
+                pattern = r'\b' + re.escape(base_common_name) + r'\b'
                 text = re.sub(pattern, better_name, text, flags=re.IGNORECASE)
-                common_name = better_name  # Update for further replacements
+                base_common_name = better_name  # Update for further replacements
+        
+        # Final pass: replace any remaining "this plant" references with the base name
+        if base_common_name:
+            text = re.sub(r'\bthis plant\b', base_common_name, text, flags=re.IGNORECASE)
+            text = re.sub(r'\bthe plant\b', base_common_name, text, flags=re.IGNORECASE)
         
         return text
     

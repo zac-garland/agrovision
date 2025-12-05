@@ -60,11 +60,17 @@ class LesionAnalyzer:
             lesion_areas = self._find_lesion_regions(lesion_mask)
             
             # Calculate health score with emphasis on lesion detection
-            # Lesion percentage is the primary indicator (weighted heavily)
-            # Green percentage is secondary (many healthy plants aren't green)
-            # Formula: Start at 1.0, subtract lesions heavily, add minimal green contribution
-            lesion_impact = (lesion_pct / 100.0) * 1.5  # Lesions weighted 1.5x (primary factor)
-            green_contribution = (green_pct / 100.0) * 0.2  # Green weighted 0.2x (secondary, optional)
+            # Lesion percentage is the PRIMARY indicator - it should dominate the score
+            # Green percentage is secondary and should NOT mask lesion detection
+            # Formula: Lesions always reduce score significantly, green only helps if minimal/no lesions
+            lesion_impact = (lesion_pct / 100.0) * 2.0  # Lesions weighted 2.0x (more aggressive)
+            
+            # Green only contributes if there are minimal lesions (< 1%)
+            # This prevents green from masking lesion detection
+            if lesion_pct < 1.0:
+                green_contribution = (green_pct / 100.0) * 0.1  # Minimal green boost only when healthy
+            else:
+                green_contribution = 0.0  # No green boost when lesions are present
             
             health_score = max(0.0, min(1.0, 1.0 - lesion_impact + green_contribution))
             

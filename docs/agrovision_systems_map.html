@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgroVision+ System Architecture</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #e0e0e0;
+            overflow-x: hidden;
+        }
+
+        .header {
+            background: rgba(20, 25, 45, 0.95);
+            padding: 20px 40px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            border-bottom: 2px solid #4CAF50;
+        }
+
+        .header h1 {
+            color: #4CAF50;
+            font-size: 2.5em;
+            margin-bottom: 5px;
+        }
+
+        .header .tagline {
+            color: #b0b0b0;
+            font-size: 1.1em;
+        }
+
+        .container {
+            display: flex;
+            min-height: calc(100vh - 120px);
+            height: auto;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .sidebar {
+            width: 300px;
+            background: rgba(20, 25, 45, 0.95);
+            border-radius: 10px;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border: 1px solid #333;
+        }
+
+        .main-content {
+            flex: 1;
+            background: rgba(20, 25, 45, 0.95);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            position: relative;
+            border: 1px solid #333;
+            min-height: 800px;
+        }
+
+        .visualization {
+            width: 100%;
+            height: 100%;
+            border: 2px solid #4CAF50;
+            border-radius: 8px;
+            background: #0f1419;
+            min-height: 800px;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+            background: #4CAF50;
+            color: white;
+        }
+
+        .btn:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+
+        .btn.active {
+            background: #2d5016;
+        }
+
+        .component-list {
+            list-style: none;
+        }
+
+        .component-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            background: rgba(40, 50, 70, 0.8);
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+            border-left: 4px solid #4CAF50;
+        }
+
+        .component-item:hover {
+            background: rgba(60, 80, 100, 0.9);
+            transform: translateX(5px);
+            border-left-color: #66BB6A;
+        }
+
+        .component-item.selected {
+            background: rgba(76, 175, 80, 0.2);
+            border-left-color: #4CAF50;
+        }
+
+        .component-item h3 {
+            font-size: 20px;
+            margin-bottom: 5px;
+            color: #4CAF50;
+        }
+
+        .component-item p {
+            font-size: 16px;
+            color: #b0b0b0;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+
+        .status-implemented {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .status-active {
+            background: #2196F3;
+            color: white;
+        }
+
+        .details-panel {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(40, 50, 70, 0.8);
+            border-radius: 5px;
+            display: none;
+            border: 1px solid #4CAF50;
+        }
+
+        .details-panel.active {
+            display: block;
+        }
+
+        .details-panel h3 {
+            color: #4CAF50;
+            margin-bottom: 10px;
+            font-size: 22px;
+        }
+
+        .details-panel p {
+            font-size: 17px;
+            line-height: 1.6;
+            color: #e0e0e0;
+        }
+
+        .stats {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(45, 80, 22, 0.9);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            font-size: 18px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+
+        .stats-item {
+            margin: 5px 0;
+        }
+
+        .footer {
+            background: rgba(20, 25, 45, 0.95);
+            padding: 20px 40px;
+            text-align: center;
+            color: #b0b0b0;
+            border-top: 2px solid #4CAF50;
+        }
+
+        .footer a {
+            color: #4CAF50;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        .legend {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(40, 50, 70, 0.8);
+            border-radius: 5px;
+            border: 1px solid #333;
+        }
+
+        .legend h4 {
+            margin-bottom: 10px;
+            color: #4CAF50;
+            font-size: 18px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 8px 0;
+            font-size: 16px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+                height: auto;
+            }
+
+            .sidebar {
+                width: 100%;
+                max-height: 300px;
+            }
+
+            .main-content {
+                height: 500px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🌱 AgroVision+</h1>
+        <p class="tagline">Intelligent Plant Diagnosis System - Agentic AI for Home Growers</p>
+    </div>
+
+    <div class="container">
+        <div class="sidebar">
+            <div class="controls">
+                <button class="btn active" onclick="switchView('architecture')">Architecture</button>
+                <button class="btn" onclick="switchView('dataflow')">Data Flow</button>
+                <button class="btn" onclick="switchView('tech')">Tech Stack</button>
+            </div>
+
+            <h3 style="margin: 20px 0 10px 0; color: #4CAF50; font-size: 22px;">Components</h3>
+            <ul class="component-list" id="componentList"></ul>
+
+            <div class="legend">
+                <h4>Legend</h4>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #2196F3;"></div>
+                    <span>Frontend/UI</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #4CAF50;"></div>
+                    <span>ML Models</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FF9800;"></div>
+                    <span>Data Sources</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #9C27B0;"></div>
+                    <span>LLM/AI</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #757575;"></div>
+                    <span>Infrastructure</span>
+                </div>
+            </div>
+
+            <div class="details-panel" id="detailsPanel">
+                <h3 id="detailsTitle"></h3>
+                <p id="detailsContent"></p>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div id="network" class="visualization"></div>
+            <div class="stats" id="stats">
+                <div class="stats-item">Components: <strong id="nodeCount">0</strong></div>
+                <div class="stats-item">Connections: <strong id="edgeCount">0</strong></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>
+            <a href="https://github.com/yourusername/agrovision" target="_blank">GitHub</a> |
+            <a href="#docs">Documentation</a> |
+            <a href="#demo">Demo</a>
+        </p>
+        <p style="margin-top: 10px; font-size: 12px;">© 2024 AgroVision+ - Open Source Plant Diagnosis System</p>
+    </div>
+
+    <script>
+        // Component data - organized hierarchically (top to bottom)
+        const components = {
+            // Layer 0: Data Sources (Left)
+            'Houseplant Data': {
+                id: 'houseplant_data',
+                label: 'Houseplant Dataset (14.7K)',
+                category: 'data',
+                level: 0,
+                description: '14,700+ images of houseplant species for training the unified species classifier.',
+                tech: 'Folder-based images',
+                status: 'implemented'
+            },
+            'PlantNet Data': {
+                id: 'plantnet_data',
+                label: 'PlantNet-300K (1081)',
+                category: 'data',
+                level: 0,
+                description: 'Large-scale plant dataset with 1081 species. Used for species classifier training with hierarchical naming.',
+                tech: 'Parquet, DuckDB',
+                status: 'implemented'
+            },
+            'PlantVillage Data': {
+                id: 'plantvillage_data',
+                label: 'PlantVillage (38 diseases)',
+                category: 'data',
+                level: 0,
+                description: '38 disease classes across multiple plant species. Used for disease classifier training and healthy class extraction.',
+                tech: 'Folder-based images',
+                status: 'implemented'
+            },
+            // Layer 1: Model Backbone
+            'EfficientNet-B4': {
+                id: 'efficientnet',
+                label: 'EfficientNet-B4 Backbone',
+                category: 'ml',
+                level: 1,
+                description: 'Pre-trained backbone architecture used by both species and disease classifiers. Provides transfer learning foundation with PlantNet-300K weights.',
+                tech: 'EfficientNet-PyTorch',
+                status: 'implemented'
+            },
+            // Layer 2: Trained Models
+            'Species Classifier': {
+                id: 'species',
+                label: 'Species Classifier (1019)',
+                category: 'ml',
+                level: 2,
+                description: 'Combines houseplant species (14.7K images), PlantNet-300K (1081 species), and PlantVillage healthy classes. Uses hierarchical naming (Common (species)) for ~1019 classes. EfficientNet-B4 backbone.',
+                tech: 'PyTorch, EfficientNet-B4',
+                status: 'implemented'
+            },
+            'Disease Classifier': {
+                id: 'disease',
+                label: 'Disease Classifier',
+                category: 'ml',
+                level: 2,
+                description: 'Trained on PlantVillage dataset to identify general disease types (Early Blight, Late Blight, etc.) without plant-specific context. Maps 38 plant-specific diseases to ~20 general disease types.',
+                tech: 'PyTorch, EfficientNet-B4',
+                status: 'implemented'
+            },
+            'Leaf Detector': {
+                id: 'leaf',
+                label: 'YOLO Leaf Detector',
+                category: 'ml',
+                level: 2,
+                description: 'YOLO11x model for detecting and isolating individual leaves in images. Provides bounding boxes for precise leaf-level analysis.',
+                tech: 'YOLO11x, Ultralytics',
+                status: 'implemented'
+            },
+            // Layer 3: Processing
+            'Lesion Analyzer': {
+                id: 'lesion',
+                label: 'Lesion Analyzer',
+                category: 'ml',
+                level: 3,
+                description: 'Image processing-based health assessment using HSV color analysis. Detects yellowing and browning lesions, calculates health scores, and identifies problematic regions.',
+                tech: 'OpenCV, NumPy, PIL',
+                status: 'implemented'
+            },
+            // Layer 4: Backend/API
+            'Backend': {
+                id: 'backend',
+                label: 'Flask API',
+                category: 'infrastructure',
+                level: 4,
+                description: 'RESTful API server handling image uploads, orchestrating model inference, and synthesizing diagnosis results. Manages all backend services and data flow.',
+                tech: 'Flask, Python',
+                status: 'implemented'
+            },
+            // Layer 5: AI Synthesis
+            'Diagnosis Engine': {
+                id: 'diagnosis',
+                label: 'Diagnosis Engine',
+                category: 'ai',
+                level: 5,
+                description: 'Synthesizes results from all models and generates comprehensive diagnosis. Uses rule-based logic or LLM for treatment recommendations.',
+                tech: 'Python, LLM Integration',
+                status: 'implemented'
+            },
+            'Ollama LLM': {
+                id: 'ollama',
+                label: 'Ollama (Mistral 7B)',
+                category: 'llm',
+                level: 5,
+                description: 'Local LLM for generating detailed diagnosis explanations and treatment plans. Runs Mistral 7B model via Ollama for privacy-preserving AI synthesis.',
+                tech: 'Ollama, Mistral 7B',
+                status: 'implemented'
+            },
+            // Layer 6: Frontend (Right)
+            'Frontend': {
+                id: 'frontend',
+                label: 'Streamlit UI',
+                category: 'ui',
+                level: 6,
+                description: 'Interactive web interface built with Streamlit. Users upload plant images and receive comprehensive diagnosis results with visualizations, treatment plans, and model predictions.',
+                tech: 'Streamlit, Python, Pandas',
+                status: 'implemented'
+            }
+        };
+
+        // Connection data - organized to flow top to bottom
+        const connections = [
+            // Data to Backbone
+            { from: 'houseplant_data', to: 'efficientnet', label: 'Training Data', width: 2 },
+            { from: 'plantnet_data', to: 'efficientnet', label: 'Training Data', width: 2 },
+            { from: 'plantvillage_data', to: 'efficientnet', label: 'Training Data', width: 2 },
+            
+            // Backbone to Models
+            { from: 'efficientnet', to: 'species', label: 'Backbone', width: 3 },
+            { from: 'efficientnet', to: 'disease', label: 'Backbone', width: 3 },
+            
+            // Data to Models (direct training)
+            { from: 'houseplant_data', to: 'species', label: 'Training', width: 1 },
+            { from: 'plantnet_data', to: 'species', label: 'Training', width: 1 },
+            { from: 'plantvillage_data', to: 'species', label: 'Healthy Classes', width: 1 },
+            { from: 'plantvillage_data', to: 'disease', label: 'Training', width: 1 },
+            
+            // Models to Processing
+            { from: 'leaf', to: 'lesion', label: 'Leaf Images', width: 2 },
+            
+            // Models/Processing to Backend
+            { from: 'species', to: 'backend', label: 'Species Results', width: 2 },
+            { from: 'disease', to: 'backend', label: 'Disease Results', width: 2 },
+            { from: 'lesion', to: 'backend', label: 'Health Metrics', width: 2 },
+            
+            // Backend to Diagnosis
+            { from: 'backend', to: 'diagnosis', label: 'All Results', width: 3 },
+            
+            // Diagnosis to LLM
+            { from: 'diagnosis', to: 'ollama', label: 'LLM Request', width: 2 },
+            { from: 'ollama', to: 'diagnosis', label: 'Treatment Plan', width: 2 },
+            
+            // Diagnosis back to Backend
+            { from: 'diagnosis', to: 'backend', label: 'Final Diagnosis', width: 3 },
+            
+            // Backend to Frontend
+            { from: 'backend', to: 'frontend', label: 'JSON Response', width: 4 },
+            { from: 'frontend', to: 'backend', label: 'Image Upload', width: 4 }
+        ];
+
+        let network = null;
+        let currentView = 'architecture';
+
+        // Initialize network
+        function initNetwork() {
+            const container = document.getElementById('network');
+            const data = getNetworkData();
+            const options = {
+                nodes: {
+                    shape: 'box',
+                    font: { size: 24, face: 'Segoe UI', bold: true },
+                    borderWidth: 3,
+                    shadow: true,
+                    margin: 20
+                },
+                edges: {
+                    arrows: { to: { enabled: true, scaleFactor: 1.2 } },
+                    font: { size: 18, align: 'middle', bold: true },
+                    smooth: { type: 'curvedCW', roundness: 0.2 },
+                    color: { color: '#848484', highlight: '#4CAF50' }
+                },
+                layout: {
+                    hierarchical: {
+                        enabled: true,
+                        direction: 'LR', // Left to right
+                        sortMethod: 'directed',
+                        levelSeparation: 250, // Horizontal spacing between levels
+                        nodeSpacing: 150, // Vertical spacing between nodes in same level
+                        treeSpacing: 200,
+                        blockShifting: true,
+                        edgeMinimization: true,
+                        parentCentralization: true
+                    }
+                },
+                physics: {
+                    enabled: false // Disable physics for hierarchical layout
+                },
+                interaction: {
+                    hover: true,
+                    tooltipDelay: 200,
+                    zoomView: true,
+                    dragView: true,
+                    dragNodes: true,
+                    selectConnectedEdges: true
+                }
+            };
+
+            network = new vis.Network(container, data, options);
+
+            // Fit the network to viewport after initial render
+            setTimeout(function() {
+                network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+            }, 100);
+
+            // Event handlers
+            network.on('click', function(params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    selectNode(nodeId);
+                }
+            });
+
+            network.on('hoverNode', function(params) {
+                container.style.cursor = 'pointer';
+            });
+
+            network.on('blurNode', function(params) {
+                container.style.cursor = 'default';
+            });
+
+            updateStats();
+            renderComponentList();
+        }
+
+        function getNetworkData() {
+            const nodes = [];
+            const edges = [];
+
+            // Color mapping
+            const colors = {
+                'ui': '#2196F3',
+                'ml': '#4CAF50',
+                'data': '#FF9800',
+                'llm': '#9C27B0',
+                'ai': '#9C27B0',
+                'infrastructure': '#757575'
+            };
+
+            // Create nodes with hierarchical levels (left to right)
+            Object.values(components).forEach(comp => {
+                // Replace newlines with spaces for horizontal layout
+                const cleanLabel = comp.label.replace(/\n/g, ' ');
+                nodes.push({
+                    id: comp.id,
+                    label: cleanLabel,
+                    level: comp.level || 0, // Set level for hierarchical layout
+                    color: {
+                        background: colors[comp.category] || '#757575',
+                        border: '#ffffff',
+                        highlight: { background: colors[comp.category], border: '#4CAF50', borderWidth: 3 }
+                    },
+                    font: { color: '#ffffff', size: 20, face: 'Segoe UI', bold: true },
+                    shape: 'box',
+                    widthConstraint: { maximum: 220, minimum: 180 },
+                    heightConstraint: { minimum: 80 },
+                    margin: 15,
+                    shadow: { enabled: true, color: 'rgba(0,0,0,0.5)', size: 10, x: 2, y: 2 }
+                });
+            });
+
+            // Create edges
+            connections.forEach(conn => {
+                edges.push({
+                    from: conn.from,
+                    to: conn.to,
+                    label: conn.label,
+                    width: conn.width || 1,
+                    color: { color: '#6a6a6a', highlight: '#4CAF50' },
+                    font: { color: '#e0e0e0', size: 16, strokeWidth: 3, strokeColor: '#000000', bold: true },
+                    arrows: { to: { enabled: true, scaleFactor: 1.2, type: 'arrow' } }
+                });
+            });
+
+            return { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+        }
+
+        function selectNode(nodeId) {
+            const component = Object.values(components).find(c => c.id === nodeId);
+            if (component) {
+                // Update details panel
+                document.getElementById('detailsTitle').textContent = component.label;
+                document.getElementById('detailsContent').innerHTML = `
+                    <strong>Description:</strong> ${component.description}<br><br>
+                    <strong>Technology:</strong> ${component.tech}<br><br>
+                    <strong>Status:</strong> <span class="status-badge status-${component.status}">${component.status.toUpperCase()}</span>
+                `;
+                document.getElementById('detailsPanel').classList.add('active');
+
+                // Highlight in component list
+                document.querySelectorAll('.component-item').forEach(item => {
+                    item.classList.remove('selected');
+                });
+                const listItem = document.querySelector(`[data-id="${nodeId}"]`);
+                if (listItem) {
+                    listItem.classList.add('selected');
+                    listItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+
+                // Highlight in network
+                network.selectNodes([nodeId]);
+                network.focus(nodeId, { scale: 1.5, animation: true });
+            }
+        }
+
+        function renderComponentList() {
+            const list = document.getElementById('componentList');
+            list.innerHTML = '';
+
+            Object.values(components).forEach(comp => {
+                const item = document.createElement('li');
+                item.className = 'component-item';
+                item.setAttribute('data-id', comp.id);
+                item.innerHTML = `
+                    <h3>${comp.label}</h3>
+                    <p>${comp.description.substring(0, 80)}...</p>
+                    <span class="status-badge status-${comp.status}">${comp.status.toUpperCase()}</span>
+                `;
+                item.addEventListener('click', () => selectNode(comp.id));
+                list.appendChild(item);
+            });
+        }
+
+        function switchView(view) {
+            currentView = view;
+            document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Update network based on view
+            const data = getNetworkData();
+            network.setData(data);
+            updateStats();
+        }
+
+        function updateStats() {
+            document.getElementById('nodeCount').textContent = Object.keys(components).length;
+            document.getElementById('edgeCount').textContent = connections.length;
+        }
+
+        // Initialize on load
+        window.addEventListener('load', () => {
+            initNetwork();
+        });
+    </script>
+</body>
+</html>
+
