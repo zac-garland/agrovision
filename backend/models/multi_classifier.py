@@ -151,3 +151,4 @@ def get_multi_classifier() -> MultiClassifier:
         _multi_classifier = MultiClassifier()
     return _multi_classifier
 
+

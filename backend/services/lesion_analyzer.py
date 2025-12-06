@@ -26,6 +26,33 @@ class LesionAnalyzer:
         self.lesion_brown_lower = np.array([5, 50, 30], dtype=np.uint8)
         self.lesion_brown_upper = np.array([25, 255, 200], dtype=np.uint8)
     
+    def check_green_percentage(self, image: Image.Image) -> float:
+        """
+        Quick check to get green percentage without full analysis.
+        Used for filtering out non-leaf detections (flowers, pots, soil, etc.).
+        
+        Args:
+            image: PIL Image of a detected object
+            
+        Returns:
+            Green percentage (0-100)
+        """
+        try:
+            # Convert PIL to numpy array
+            img_array = np.array(image.convert('RGB'))
+            
+            # Segment leaf from background
+            segmented = self._segment_leaf(img_array)
+            
+            # Calculate green percentage
+            green_pct, _ = self._calculate_green_percentage(segmented)
+            
+            return float(green_pct)
+            
+        except Exception as e:
+            print(f"⚠️  Error checking green percentage: {e}")
+            return 0.0
+    
     def analyze_leaf(self, image: Image.Image) -> Dict:
         """
         Analyze a leaf image for potential lesions and health indicators.

@@ -25,6 +25,7 @@ BASE_DIR = Path(__file__).parent.parent.parent
 DISEASE_MODEL_PATH = BASE_DIR / "models" / "efficientnet_b4_disease_classifier.tar"
 DISEASE_MODEL_DEV_PATH = BASE_DIR / "models" / "efficientnet_b4_disease_classifier_dev.tar"
 DISEASE_MAPPING_PATH = BASE_DIR / "backend" / "models" / "disease_mapping.json"
+GENERALIZATION_MAPPING_PATH = BASE_DIR / "classifier data" / "disease_generalization_mapping_7class.json"
 
 
 class DiseaseClassifier:
@@ -148,35 +149,23 @@ class DiseaseClassifier:
             self.disease_mapping = {}
             self.reverse_mapping = {}
     
-    def map_to_general_disease(self, plant_specific_disease: str) -> str:
+    def map_to_general_disease(self, class_name: str) -> str:
         """
-        Map plant-specific disease (e.g., "Tomato___Early_blight") to general disease (e.g., "Early Blight").
+        Map disease class name to general disease name.
+        
+        Since the model is now trained with generalized classes (5 classes),
+        the class_name should already be a generalized class. This function
+        is kept for backward compatibility and to handle any edge cases.
         
         Args:
-            plant_specific_disease: Disease class name in format "Plant___Disease"
+            class_name: Disease class name (should already be generalized)
             
         Returns:
-            General disease name, or original if no mapping found
+            General disease name
         """
-        if not self.disease_mapping:
-            # No mapping loaded, extract disease part manually
-            if '___' in plant_specific_disease:
-                disease_part = plant_specific_disease.split('___', 1)[1]
-                # Convert underscores to spaces and title case
-                return disease_part.replace('_', ' ').title()
-            return plant_specific_disease
-        
-        # Use mapping if available
-        general_disease = self.disease_mapping.get(plant_specific_disease, None)
-        if general_disease:
-            return general_disease
-        
-        # Fallback: extract disease part if no mapping
-        if '___' in plant_specific_disease:
-            disease_part = plant_specific_disease.split('___', 1)[1]
-            return disease_part.replace('_', ' ').title()
-        
-        return plant_specific_disease
+        # If the model was trained with generalized classes, class_name is already generalized
+        # Just return it as-is (it's already one of: Bacterial Disease, Fungal Leaf Disease, etc.)
+        return class_name
     
     def preprocess_image(self, image_pil: Image.Image) -> torch.Tensor:
         """Preprocess image for model input."""

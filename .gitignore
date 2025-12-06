@@ -77,3 +77,9 @@ Thumbs.db
 .Rproj.user
 house_plant_species/
 classifier data/
+
+backend/static/
+docs/screenshots/
+*.Rhistory
+.Rhistory
+.Rapp.history

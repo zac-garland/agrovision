@@ -124,15 +124,30 @@ def diagnose():
         )
         
         # Analyze each detected leaf for lesions
+        # Filter out non-leaf detections (flowers, pots, soil) by checking green percentage
         leaf_analyses = []
         overall_health_score = 0.0
         has_potential_issues = False
+        rejected_detections = 0  # Track how many were filtered out
         
         # Get leaf bounding boxes for visualization
         leaf_boxes = leaf_detection.get('boxes', [])
         
+        # Green percentage threshold for accepting a detection as a leaf
+        GREEN_THRESHOLD = 50.0  # Minimum 50% green to be considered a leaf
+        
         if leaf_detection['num_leaves'] > 0:
             for i, leaf_image in enumerate(leaf_detection['leaves']):
+                # Quick green percentage check to filter out non-leaf detections
+                green_pct = lesion_analyzer.check_green_percentage(leaf_image)
+                
+                if green_pct < GREEN_THRESHOLD:
+                    # Reject this detection - likely a flower, pot, soil, or other non-leaf object
+                    rejected_detections += 1
+                    print(f"   ⚠️  Rejected detection {i+1}: only {green_pct:.1f}% green (threshold: {GREEN_THRESHOLD}%)")
+                    continue
+                
+                # This detection passed the green threshold - analyze it for lesions
                 analysis = lesion_analyzer.analyze_leaf(leaf_image)
                 
                 # Get lesion areas (bounding boxes for lesions)
@@ -142,7 +157,7 @@ def diagnose():
                 leaf_box = leaf_boxes[i] if i < len(leaf_boxes) else None
                 
                 leaf_analyses.append({
-                    'leaf_index': i + 1,
+                    'leaf_index': len(leaf_analyses) + 1,  # Re-index after filtering
                     'health_score': float(analysis['health_score']),
                     'green_percentage': float(analysis['green_percentage']),
                     'lesion_percentage': float(analysis['lesion_percentage']),
@@ -159,6 +174,17 @@ def diagnose():
             
             if len(leaf_analyses) > 0:
                 overall_health_score = overall_health_score / len(leaf_analyses)
+            else:
+                # All detections were rejected - set default values
+                overall_health_score = 0.5  # Neutral score
+                print(f"   ⚠️  All {leaf_detection['num_leaves']} detection(s) were rejected (insufficient green)")
+                print(f"   ℹ️  This may indicate the image contains flowers, pots, or soil rather than leaves")
+            
+            # Log filtering results
+            if rejected_detections > 0:
+                print(f"   ℹ️  Filtered out {rejected_detections} non-leaf detection(s) (< {GREEN_THRESHOLD}% green)")
+            if len(leaf_analyses) > 0:
+                print(f"   ✅ Analyzing {len(leaf_analyses)} valid leaf detection(s)")
         
         # Phase 5: LLM Synthesis for diagnosis and treatment plan
         print("   Synthesizing diagnosis with LLM...")
@@ -216,7 +242,9 @@ def diagnose():
             'lesion_analysis': {
                 'method': 'Image Processing (HSV color analysis)',
                 'description': 'Detects lesions through color analysis (yellowing, browning)',
-                'num_leaves': int(leaf_detection['num_leaves']),
+                'num_leaves': len(leaf_analyses),  # Use filtered count, not original detection count
+                'num_detections': int(leaf_detection['num_leaves']),  # Original YOLO detection count
+                'rejected_detections': rejected_detections,  # How many were filtered out
                 'overall_health_score': float(overall_health_score),
                 'has_issues': bool(has_potential_issues),
                 'individual_leaves': leaf_analyses
@@ -224,7 +252,9 @@ def diagnose():
         }
         
         leaf_analysis_data = {
-            'num_leaves_detected': int(leaf_detection['num_leaves']),
+            'num_leaves_detected': len(leaf_analyses),  # Use filtered count
+            'num_detections_total': int(leaf_detection['num_leaves']),  # Original YOLO detections
+            'rejected_detections': rejected_detections,  # Non-leaf objects filtered out
             'overall_health_score': float(overall_health_score),
             'has_potential_issues': bool(has_potential_issues),
             'individual_leaves': leaf_analyses,
@@ -289,7 +319,9 @@ def diagnose():
                 "disease_detection": {
                     # Leaf analysis (image processing-based health assessment)
                     "leaf_analysis": {
-                        "num_leaves_detected": int(leaf_detection['num_leaves']),
+                        "num_leaves_detected": len(leaf_analyses),
+                        "num_detections_total": int(leaf_detection['num_leaves']),
+                        "rejected_detections": rejected_detections,
                         "overall_health_score": round(float(overall_health_score), 3),
                         "has_potential_issues": bool(has_potential_issues),
                         "individual_leaves": leaf_analyses,
